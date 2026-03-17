@@ -234,10 +234,10 @@ These are loaded in `src\config.rs`.
 | `APP_HOST` | Host Rocket binds to | `0.0.0.0` |
 | `APP_PORT` | Port Rocket listens on | `8000` |
 | `DATABASE_HOST` | MySQL host | `127.0.0.1` |
-| `DATABASE_PORT` | MySQL port | `1433` |
+| `DATABASE_PORT` | MySQL port | `3306` |
 | `DATABASE_NAME` | App database name | `card_game` |
 | `DATABASE_USER` | MySQL username | `root` |
-| `DATABASE_PASSWORD` | MySQL password | `Your_strong_password123` |
+| `DATABASE_PASSWORD` | MySQL password | `change-me-root-password` |
 | `DB_CONNECT_RETRIES` | Startup retry count | `20` |
 | `DB_CONNECT_DELAY_SECS` | Delay between retries | `3` |
 | `JWT_SECRET` | Secret used to sign bearer tokens | `change-me-for-production` |
@@ -356,9 +356,9 @@ The database code lives in:
 
 ### Connection layer
 
-`client.rs` creates MySQL connections using Tiberius.
+`client.rs` creates MySQL connections using `mysql_async`.
 
-It builds a MySQL connection config, opens a TCP connection, and hands that socket to the TDS driver.
+It builds MySQL connection options and opens an async connection for queries and startup bootstrap work.
 
 ### Startup bootstrap
 

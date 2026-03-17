@@ -31,7 +31,7 @@ impl Database {
 
     async fn connect_to(&self, database_name: Option<&str>) -> Result<Conn, ApiError> {
         let mut builder = OptsBuilder::default()
-            .ip_or_hostname(Some(self.config.host.clone()))
+            .ip_or_hostname(self.config.host.clone())
             .tcp_port(self.config.port)
             .user(Some(self.config.user.clone()))
             .pass(Some(self.config.password.clone()));
