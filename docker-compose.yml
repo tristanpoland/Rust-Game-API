@@ -1,0 +1,32 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8000
+      DATABASE_HOST: db
+      DATABASE_PORT: 1433
+      DATABASE_NAME: card_game
+      DATABASE_USER: sa
+      DATABASE_PASSWORD: Your_strong_password123
+      DB_CONNECT_RETRIES: 30
+      DB_CONNECT_DELAY_SECS: 3
+    depends_on:
+      - db
+
+  db:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: Y
+      MSSQL_SA_PASSWORD: Your_strong_password123
+    ports:
+      - "1433:1433"
+    volumes:
+      - mssql_data:/var/opt/mssql
+
+volumes:
+  mssql_data:
