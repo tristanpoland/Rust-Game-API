@@ -1,13 +1,9 @@
-use tokio::net::TcpStream;
-use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
-use tiberius::{AuthMethod, Client, Config};
+use mysql_async::{Conn, OptsBuilder, prelude::Queryable};
 
 use crate::{
     api::error::ApiError,
     config::DatabaseConfig,
 };
-
-pub type SqlClient = Client<Compat<TcpStream>>;
 
 #[derive(Clone)]
 pub struct Database {
@@ -19,40 +15,32 @@ impl Database {
         Self { config }
     }
 
-    pub async fn connect(&self) -> Result<SqlClient, ApiError> {
+    pub async fn connect(&self) -> Result<Conn, ApiError> {
         self.connect_to(Some(&self.config.name)).await
     }
 
-    pub async fn connect_to_master(&self) -> Result<SqlClient, ApiError> {
-        self.connect_to(Some("master")).await
+    pub async fn connect_to_server(&self) -> Result<Conn, ApiError> {
+        self.connect_to(None).await
     }
 
     pub async fn ping(&self) -> Result<(), ApiError> {
         let mut client = self.connect().await?;
-        client.simple_query("SELECT 1;").await?.into_results().await?;
+        client.query_drop("SELECT 1;").await?;
         Ok(())
     }
 
-    async fn connect_to(&self, database_name: Option<&str>) -> Result<SqlClient, ApiError> {
-        let mut config = Config::new();
-        config.host(&self.config.host);
-        config.port(self.config.port);
-        config.authentication(AuthMethod::sql_server(
-            self.config.user.clone(),
-            self.config.password.clone(),
-        ));
-        config.trust_cert();
+    async fn connect_to(&self, database_name: Option<&str>) -> Result<Conn, ApiError> {
+        let mut builder = OptsBuilder::default()
+            .ip_or_hostname(Some(self.config.host.clone()))
+            .tcp_port(self.config.port)
+            .user(Some(self.config.user.clone()))
+            .pass(Some(self.config.password.clone()));
 
         if let Some(database_name) = database_name {
-            config.database(database_name);
+            builder = builder.db_name(Some(database_name.to_string()));
         }
 
-        let tcp = TcpStream::connect(config.get_addr()).await?;
-        tcp.set_nodelay(true)?;
-
-        Client::connect(config, tcp.compat_write())
-            .await
-            .map_err(ApiError::from)
+        Conn::new(builder).await.map_err(ApiError::from)
     }
 
     pub fn database_name(&self) -> &str {

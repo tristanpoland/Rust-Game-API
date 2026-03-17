@@ -1,3 +1,5 @@
+use mysql_async::prelude::Queryable;
+
 use crate::{
     api::error::ApiError,
     db::Database,
@@ -15,15 +17,13 @@ impl<'a> CatalogRepository<'a> {
 
     pub async fn list_cards(&self) -> Result<Vec<CardCatalogItem>, ApiError> {
         let mut client = self.database.connect().await?;
-        let rows = client
-            .query(
+        let rows: Vec<(String, String, String, String, i32)> = client
+            .exec(
                 "SELECT card_id, name, rarity, set_name, unlock_level
-                 FROM dbo.cards
+                 FROM cards
                  ORDER BY unlock_level, rarity, name;",
-                &[],
+                (),
             )
-            .await?
-            .into_first_result()
             .await?;
 
         Ok(rows.into_iter().map(map_card).collect())
@@ -31,15 +31,13 @@ impl<'a> CatalogRepository<'a> {
 
     pub async fn list_rewards(&self) -> Result<Vec<RewardCatalogItem>, ApiError> {
         let mut client = self.database.connect().await?;
-        let rows = client
-            .query(
+        let rows: Vec<(String, String, String, i32, i32)> = client
+            .exec(
                 "SELECT reward_id, name, reward_type, amount, unlock_level
-                 FROM dbo.rewards
+                 FROM rewards
                  ORDER BY unlock_level, reward_type, name;",
-                &[],
+                (),
             )
-            .await?
-            .into_first_result()
             .await?;
 
         Ok(rows.into_iter().map(map_reward).collect())
@@ -47,15 +45,13 @@ impl<'a> CatalogRepository<'a> {
 
     pub async fn get_card(&self, card_id: &str) -> Result<Option<CardCatalogItem>, ApiError> {
         let mut client = self.database.connect().await?;
-        let row = client
-            .query(
+        let row: Option<(String, String, String, String, i32)> = client
+            .exec_first(
                 "SELECT card_id, name, rarity, set_name, unlock_level
-                 FROM dbo.cards
-                 WHERE card_id = @P1;",
-                &[&card_id],
+                 FROM cards
+                 WHERE card_id = ?;",
+                (card_id,),
             )
-            .await?
-            .into_row()
             .await?;
 
         Ok(row.map(map_card))
@@ -66,52 +62,35 @@ impl<'a> CatalogRepository<'a> {
         reward_id: &str,
     ) -> Result<Option<RewardCatalogItem>, ApiError> {
         let mut client = self.database.connect().await?;
-        let row = client
-            .query(
+        let row: Option<(String, String, String, i32, i32)> = client
+            .exec_first(
                 "SELECT reward_id, name, reward_type, amount, unlock_level
-                 FROM dbo.rewards
-                 WHERE reward_id = @P1;",
-                &[&reward_id],
+                 FROM rewards
+                 WHERE reward_id = ?;",
+                (reward_id,),
             )
-            .await?
-            .into_row()
             .await?;
 
         Ok(row.map(map_reward))
     }
 }
 
-fn map_card(row: tiberius::Row) -> CardCatalogItem {
+fn map_card(row: (String, String, String, String, i32)) -> CardCatalogItem {
     CardCatalogItem {
-        card_id: row
-            .get::<&str, _>("card_id")
-            .unwrap_or_default()
-            .to_string(),
-        name: row.get::<&str, _>("name").unwrap_or_default().to_string(),
-        rarity: row
-            .get::<&str, _>("rarity")
-            .unwrap_or_default()
-            .to_string(),
-        set_name: row
-            .get::<&str, _>("set_name")
-            .unwrap_or_default()
-            .to_string(),
-        unlock_level: row.get::<i32, _>("unlock_level").unwrap_or_default(),
+        card_id: row.0,
+        name: row.1,
+        rarity: row.2,
+        set_name: row.3,
+        unlock_level: row.4,
     }
 }
 
-fn map_reward(row: tiberius::Row) -> RewardCatalogItem {
+fn map_reward(row: (String, String, String, i32, i32)) -> RewardCatalogItem {
     RewardCatalogItem {
-        reward_id: row
-            .get::<&str, _>("reward_id")
-            .unwrap_or_default()
-            .to_string(),
-        name: row.get::<&str, _>("name").unwrap_or_default().to_string(),
-        reward_type: row
-            .get::<&str, _>("reward_type")
-            .unwrap_or_default()
-            .to_string(),
-        amount: row.get::<i32, _>("amount").unwrap_or_default(),
-        unlock_level: row.get::<i32, _>("unlock_level").unwrap_or_default(),
+        reward_id: row.0,
+        name: row.1,
+        reward_type: row.2,
+        amount: row.3,
+        unlock_level: row.4,
     }
 }

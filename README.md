@@ -1,15 +1,17 @@
-# Card Game API with Rocket and SQL Server
+# Card Game API with Rocket and MySQL
 
 This project is a beginner-friendly Rust API for a card game.
 
 It lets you:
 
-- create users
+- register accounts
+- log in with username and password
+- receive JWT bearer tokens
 - list available cards and rewards
 - grant player progress
 - unlock cards
 - claim rewards
-- store everything in Microsoft SQL Server
+- store everything in MySQL
 - run the whole stack with Docker Compose
 
 If you are new to Rust, new to APIs, or new to Rocket, this README is meant to teach the project from the ground up.
@@ -22,18 +24,21 @@ This API is built with:
 
 - `Rust`: the programming language
 - `Rocket`: the web framework
-- `Tiberius`: the SQL Server driver
-- `Microsoft SQL Server`: the database
+- `jsonwebtoken`: JWT token signing and verification
+- `argon2`: secure password hashing
+- `mysql_async`: the MySQL driver
+- `MySQL`: the database
 - `Docker Compose`: the tool that runs multiple containers together
 
 In plain English:
 
 1. A client sends a request like “create a user” or “give this player XP”.
 2. Rocket receives the request.
-3. A route calls a service.
-4. The service applies game rules.
-5. A repository talks to SQL Server.
-6. The API returns JSON.
+3. Rocket can also check a bearer token before protected routes run.
+4. A route calls a service.
+5. The service applies game rules.
+6. A repository talks to MySQL.
+7. The API returns JSON.
 
 ## 2. What Rust is doing here
 
@@ -62,9 +67,10 @@ Rocket is the web framework. It gives you a clean way to define HTTP endpoints.
 Examples from this project:
 
 - `#[get("/health")]` means “this function handles `GET /health`”
-- `#[post("/users", data = "<request>")]` means “this function handles `POST /users` with JSON input”
+- `#[post("/auth/login", data = "<request>")]` means “this function handles `POST /auth/login` with JSON input”
 - `State<AppState>` lets route handlers access shared application state
 - `Json<T>` converts between Rust types and JSON
+- a request guard like `AuthenticatedUser` can reject requests before your handler runs
 
 Rocket also starts the web server and listens on a host and port.
 
@@ -83,18 +89,19 @@ src\
   api\
     error.rs              # shared API error type and JSON error responses
   db\
-    client.rs             # SQL Server connection logic
+    client.rs             # MySQL connection logic
     schema.rs             # database creation, tables, and seed data
   features\
+    auth\                 # registration, login, JWTs, route guards
     health\               # health endpoint
-    users\                # create and fetch users
+    users\                # fetch user profiles
     catalog\              # list cards and rewards
     progression\          # XP gain, unlocks, and inventory
   app_state.rs            # shared state passed to Rocket
   config.rs               # environment-based configuration
   main.rs                 # app startup and route mounting
 
-docker-compose.yml        # runs API + SQL Server
+docker-compose.yml        # runs API + MySQL
 Dockerfile                # container build for the API
 .env.example              # sample environment values
 Cargo.toml                # Rust dependencies
@@ -118,7 +125,7 @@ That pattern keeps the project easier to grow than putting everything in one fil
 You have two main ways to run the project:
 
 - easiest: Docker Compose
-- manual: Rust + SQL Server installed separately
+- manual: Rust + MySQL installed separately
 
 ### Option A: easiest path with Docker
 
@@ -133,7 +140,7 @@ That is enough to run both the API and the database together.
 Install:
 
 - Rust from `https://www.rust-lang.org/tools/install`
-- a SQL Server instance
+- a MySQL server instance
 - optionally a REST client like Postman, Insomnia, or just `curl`
 
 To verify Rust:
@@ -154,7 +161,7 @@ docker compose up --build
 What happens:
 
 1. Docker builds the Rust API image.
-2. Docker starts SQL Server.
+2. Docker starts MySQL.
 3. Docker starts the API.
 4. On startup, the API creates the database if needed.
 5. The API creates tables if needed.
@@ -166,10 +173,10 @@ The API will be available at:
 http://localhost:8000
 ```
 
-The SQL Server port will be:
+The MySQL port will be:
 
 ```text
-localhost:1433
+localhost:3306
 ```
 
 To stop everything:
@@ -194,12 +201,14 @@ You can set them in PowerShell like this:
 $env:APP_HOST="0.0.0.0"
 $env:APP_PORT="8000"
 $env:DATABASE_HOST="127.0.0.1"
-$env:DATABASE_PORT="1433"
+$env:DATABASE_PORT="3306"
 $env:DATABASE_NAME="card_game"
-$env:DATABASE_USER="sa"
-$env:DATABASE_PASSWORD="Your_strong_password123"
+$env:DATABASE_USER="root"
+$env:DATABASE_PASSWORD="change-me-root-password"
 $env:DB_CONNECT_RETRIES="20"
 $env:DB_CONNECT_DELAY_SECS="3"
+$env:JWT_SECRET="change-me-for-production"
+$env:JWT_EXPIRATION_SECS="86400"
 ```
 
 Then run:
@@ -210,7 +219,7 @@ cargo run
 
 The app will:
 
-- connect to SQL Server
+- connect to MySQL
 - create the database if needed
 - create tables
 - seed starter data
@@ -224,13 +233,15 @@ These are loaded in `src\config.rs`.
 |---|---|---|
 | `APP_HOST` | Host Rocket binds to | `0.0.0.0` |
 | `APP_PORT` | Port Rocket listens on | `8000` |
-| `DATABASE_HOST` | SQL Server host | `127.0.0.1` |
-| `DATABASE_PORT` | SQL Server port | `1433` |
+| `DATABASE_HOST` | MySQL host | `127.0.0.1` |
+| `DATABASE_PORT` | MySQL port | `1433` |
 | `DATABASE_NAME` | App database name | `card_game` |
-| `DATABASE_USER` | SQL Server username | `sa` |
-| `DATABASE_PASSWORD` | SQL Server password | `Your_strong_password123` |
+| `DATABASE_USER` | MySQL username | `root` |
+| `DATABASE_PASSWORD` | MySQL password | `Your_strong_password123` |
 | `DB_CONNECT_RETRIES` | Startup retry count | `20` |
 | `DB_CONNECT_DELAY_SECS` | Delay between retries | `3` |
+| `JWT_SECRET` | Secret used to sign bearer tokens | `change-me-for-production` |
+| `JWT_EXPIRATION_SECS` | Token lifetime in seconds | `86400` |
 
 ## 10. API endpoints
 
@@ -246,21 +257,33 @@ Example:
 curl http://localhost:8000/health
 ```
 
-### Users
+### Authentication
 
-`POST /api/users`
+`POST /api/auth/register`
 
-Create a player.
+Create a player account and immediately receive a bearer token.
 
 ```powershell
-curl -X POST http://localhost:8000/api/users `
+curl -X POST http://localhost:8000/api/auth/register `
   -H "Content-Type: application/json" `
-  -d "{\"username\":\"player_one\"}"
+  -d "{\"username\":\"player_one\",\"password\":\"hunter22\"}"
 ```
+
+`POST /api/auth/login`
+
+Log in with username and password and receive a fresh bearer token.
+
+```powershell
+curl -X POST http://localhost:8000/api/auth/login `
+  -H "Content-Type: application/json" `
+  -d "{\"username\":\"player_one\",\"password\":\"hunter22\"}"
+```
+
+### Users
 
 `GET /api/users/{user_id}`
 
-Fetch a user profile.
+Fetch a user profile. This route is protected and requires an `Authorization: Bearer ...` header.
 
 ### Catalog
 
@@ -274,12 +297,15 @@ List all rewards in the catalog.
 
 ### Progression and unlocks
 
+All routes in this section are protected and require a valid bearer token for the same `user_id` in the URL.
+
 `POST /api/users/{user_id}/progress`
 
 Give a player XP. If they cross a level threshold, they automatically unlock any cards and rewards assigned to those levels.
 
 ```powershell
 curl -X POST http://localhost:8000/api/users/USER_ID/progress `
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" `
   -H "Content-Type: application/json" `
   -d "{\"xp_gained\":250}"
 ```
@@ -302,6 +328,7 @@ Claim a reward manually.
 
 ```powershell
 curl -X POST http://localhost:8000/api/users/USER_ID/rewards/reward-gold-100/claim `
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" `
   -H "Content-Type: application/json" `
   -d "{\"quantity\":2}"
 ```
@@ -311,11 +338,12 @@ curl -X POST http://localhost:8000/api/users/USER_ID/rewards/reward-gold-100/cla
 Here is a full flow:
 
 1. Start the stack with `docker compose up --build`
-2. Create a user with `POST /api/users`
+2. Register with `POST /api/auth/register`
 3. Copy the returned `user_id`
-4. Call `POST /api/users/{user_id}/progress` with XP
-5. Check `GET /api/users/{user_id}/collection`
-6. Check `GET /api/users/{user_id}/rewards`
+4. Copy the returned `access_token`
+5. Call `POST /api/users/{user_id}/progress` with the bearer token
+6. Check `GET /api/users/{user_id}/collection`
+7. Check `GET /api/users/{user_id}/rewards`
 
 That is the core gameplay loop of this starter API.
 
@@ -328,15 +356,15 @@ The database code lives in:
 
 ### Connection layer
 
-`client.rs` creates SQL Server connections using Tiberius.
+`client.rs` creates MySQL connections using Tiberius.
 
-It builds a SQL Server connection config, opens a TCP connection, and hands that socket to the TDS driver.
+It builds a MySQL connection config, opens a TCP connection, and hands that socket to the TDS driver.
 
 ### Startup bootstrap
 
 `schema.rs` does three things:
 
-1. connect to SQL Server
+1. connect to MySQL
 2. create the application database if it does not exist
 3. create tables and seed starter content
 
@@ -354,7 +382,7 @@ The schema contains:
 
 In plain English:
 
-- `users` stores players
+- `users` stores players and their password hashes
 - `cards` stores the master card catalog
 - `rewards` stores the master reward catalog
 - `user_cards` stores which player unlocked which card
@@ -369,15 +397,17 @@ Take this request:
 The flow is:
 
 1. Rocket matches the route in `progression\routes.rs`
-2. Rocket deserializes JSON into `GrantProgressRequest`
-3. The route creates `ProgressionService`
-4. The service validates input
-5. The service loads the user
-6. The service calculates the new level from XP
-7. The repository updates the user in SQL Server
-8. The repository loads all cards and rewards unlocked by the new levels
-9. The repository writes unlock records
-10. Rocket serializes the response as JSON
+2. The `AuthenticatedUser` request guard reads the bearer token
+3. The JWT is verified with the configured secret
+4. Rocket deserializes JSON into `GrantProgressRequest`
+5. The route creates `ProgressionService`
+6. The service validates input
+7. The service loads the user
+8. The service calculates the new level from XP
+9. The repository updates the user in MySQL
+10. The repository loads all cards and rewards unlocked by the new levels
+11. The repository writes unlock records
+12. Rocket serializes the response as JSON
 
 That same pattern is used across the app.
 
@@ -402,6 +432,7 @@ Inside feature folders, `mod.rs` exposes what the rest of the app should use.
 That is why route mounting in `main.rs` can say:
 
 ```rust
+.mount("/api", auth::routes())
 .mount("/api", users::routes())
 ```
 
@@ -415,7 +446,11 @@ Example pattern:
 
 ```rust
 #[get("/users/<user_id>")]
-async fn get_user(state: &State<AppState>, user_id: &str) -> Result<Json<UserProfile>, ApiError> {
+async fn get_user(
+    auth: AuthenticatedUser,
+    state: &State<AppState>,
+    user_id: &str,
+) -> Result<Json<UserProfile>, ApiError> {
     // ...
 }
 ```
@@ -423,6 +458,7 @@ async fn get_user(state: &State<AppState>, user_id: &str) -> Result<Json<UserPro
 Important parts:
 
 - `#[get(...)]`: route definition
+- `AuthenticatedUser`: Rocket guard that requires a valid JWT
 - `State<AppState>`: shared app state
 - `user_id: &str`: a value taken from the URL
 - `Json<UserProfile>`: JSON response body
@@ -468,6 +504,8 @@ Shared API errors are defined in `src\api\error.rs`.
 
 They map internal failures to clean HTTP responses like:
 
+- `401 Unauthorized`
+- `403 Forbidden`
 - `400 Bad Request`
 - `404 Not Found`
 - `409 Conflict`
@@ -475,7 +513,37 @@ They map internal failures to clean HTTP responses like:
 
 This is better than crashing or returning random text.
 
-## 18. How to expand the API
+## 18. How authentication works
+
+This project uses JWT bearer tokens.
+
+The auth code lives in:
+
+- `src\features\auth\jwt.rs`
+- `src\features\auth\guard.rs`
+- `src\features\auth\service.rs`
+- `src\features\auth\routes.rs`
+
+The flow is:
+
+1. A user registers or logs in with username and password.
+2. The password is hashed with Argon2 before storage.
+3. The API signs a JWT with `JWT_SECRET`.
+4. The client sends that token in the `Authorization` header.
+5. Rocket runs the `AuthenticatedUser` guard on protected routes.
+6. If the token is valid, the request continues.
+7. If the token is invalid or expired, the API returns `401`.
+
+Example protected request:
+
+```powershell
+curl http://localhost:8000/api/users/USER_ID `
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"
+```
+
+Treat `JWT_SECRET` like a secret. In real deployments, set a strong random value and do not commit a real production secret.
+
+## 19. How to expand the API
 
 The cleanest way to grow the project is to add a new feature module.
 
@@ -534,7 +602,7 @@ Update `src\db\schema.rs` to create any new SQL tables.
 
 That is the basic pattern for almost every expansion.
 
-## 19. How to add new game rules
+## 20. How to add new game rules
 
 Typical changes go here:
 
@@ -550,7 +618,7 @@ If you change the schema, make sure you update:
 - row mapping code
 - any endpoints returning that data
 
-## 20. How to test the project
+## 21. How to test the project
 
 Run:
 
@@ -563,14 +631,14 @@ Right now the project includes unit tests for progression level math.
 A good next step would be adding:
 
 - service-level tests for unlock behavior
-- repository integration tests against SQL Server
+- repository integration tests against MySQL
 - API tests for important routes
+- auth integration tests for protected endpoints
 
-## 21. Good next improvements
+## 22. Good next improvements
 
 If you want to turn this into a more production-ready project, good next steps are:
 
-- authentication and authorization
 - migrations instead of startup schema SQL
 - connection pooling
 - structured logging
@@ -580,27 +648,29 @@ If you want to turn this into a more production-ready project, good next steps a
 - pack opening mechanics
 - match history and leaderboards
 
-## 22. If you are brand new, start here
+## 23. If you are brand new, start here
 
 If all of this still feels like a lot, use this order:
 
 1. run `docker compose up --build`
 2. call `GET /health`
-3. call `POST /api/users`
+3. call `POST /api/auth/register`
 4. call `POST /api/users/{user_id}/progress`
 5. read `src\main.rs`
-6. read one feature folder from top to bottom
-7. make one tiny change, like adding a new seeded card
+6. read the `auth` feature folder
+7. read one more feature folder from top to bottom
+8. make one tiny change, like adding a new seeded card
 
 That is the fastest way to learn this codebase.
 
-## 23. Summary
+## 24. Summary
 
 This project is a modular Rocket-based game API with:
 
 - Rust for the application language
 - Rocket for HTTP routing and JSON handling
-- SQL Server for persistence
+- JWT bearer token authentication for player routes
+- MySQL for persistence
 - Docker Compose for easy startup
 
 If you want to grow it, follow the same pattern:
@@ -612,3 +682,4 @@ If you want to grow it, follow the same pattern:
 - schema updates
 
 That keeps the code organized as the game becomes bigger.
+

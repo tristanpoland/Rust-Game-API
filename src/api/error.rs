@@ -12,6 +12,10 @@ pub enum ApiError {
     #[error("{0}")]
     Config(String),
     #[error("{0}")]
+    Unauthorized(String),
+    #[error("{0}")]
+    Forbidden(String),
+    #[error("{0}")]
     Validation(String),
     #[error("{0}")]
     NotFound(String),
@@ -33,6 +37,8 @@ impl ApiError {
     fn code(&self) -> &'static str {
         match self {
             Self::Config(_) => "config_error",
+            Self::Unauthorized(_) => "unauthorized",
+            Self::Forbidden(_) => "forbidden",
             Self::Validation(_) => "validation_error",
             Self::NotFound(_) => "not_found",
             Self::Conflict(_) => "conflict",
@@ -44,6 +50,8 @@ impl ApiError {
     fn status(&self) -> Status {
         match self {
             Self::Config(_) | Self::Internal(_) | Self::Database(_) => Status::InternalServerError,
+            Self::Unauthorized(_) => Status::Unauthorized,
+            Self::Forbidden(_) => Status::Forbidden,
             Self::Validation(_) => Status::BadRequest,
             Self::NotFound(_) => Status::NotFound,
             Self::Conflict(_) => Status::Conflict,
@@ -51,8 +59,8 @@ impl ApiError {
     }
 }
 
-impl From<tiberius::error::Error> for ApiError {
-    fn from(error: tiberius::error::Error) -> Self {
+impl From<mysql_async::Error> for ApiError {
+    fn from(error: mysql_async::Error) -> Self {
         Self::Database(error.to_string())
     }
 }
@@ -60,6 +68,12 @@ impl From<tiberius::error::Error> for ApiError {
 impl From<std::io::Error> for ApiError {
     fn from(error: std::io::Error) -> Self {
         Self::Internal(error.to_string())
+    }
+}
+
+impl From<jsonwebtoken::errors::Error> for ApiError {
+    fn from(error: jsonwebtoken::errors::Error) -> Self {
+        Self::Unauthorized(error.to_string())
     }
 }
 

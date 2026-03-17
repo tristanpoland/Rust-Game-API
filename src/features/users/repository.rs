@@ -1,9 +1,10 @@
+use mysql_async::prelude::Queryable;
 use uuid::Uuid;
 
 use crate::{
     api::error::ApiError,
     db::Database,
-    features::users::models::UserProfile,
+    features::users::models::{NewUser, StoredUserCredentials, UserProfile},
 };
 
 pub struct UsersRepository<'a> {
@@ -15,15 +16,15 @@ impl<'a> UsersRepository<'a> {
         Self { database }
     }
 
-    pub async fn create_user(&self, username: &str) -> Result<UserProfile, ApiError> {
+    pub async fn create_user(&self, new_user: &NewUser) -> Result<UserProfile, ApiError> {
         let user_id = Uuid::new_v4().to_string();
         let mut client = self.database.connect().await?;
 
         client
-            .execute(
-                "INSERT INTO dbo.users (user_id, username, xp, level, created_at)
-                 VALUES (@P1, @P2, 0, 1, SYSUTCDATETIME());",
-                &[&user_id, &username],
+            .exec_drop(
+                "INSERT INTO users (user_id, username, password_hash, xp, level, created_at)
+                 VALUES (?, ?, ?, 0, 1, UTC_TIMESTAMP());",
+                (&user_id, &new_user.username, &new_user.password_hash),
             )
             .await?;
 
@@ -33,23 +34,54 @@ impl<'a> UsersRepository<'a> {
     }
 
     pub async fn get_user(&self, user_id: &str) -> Result<Option<UserProfile>, ApiError> {
+        Ok(self
+            .get_user_credentials_by_id(user_id)
+            .await?
+            .map(|user| user.profile))
+    }
+
+    pub async fn get_user_credentials_by_id(
+        &self,
+        user_id: &str,
+    ) -> Result<Option<StoredUserCredentials>, ApiError> {
         let mut client = self.database.connect().await?;
-        let row = client
-            .query(
+        let row: Option<(String, String, Option<String>, i32, i32, String)> = client
+            .exec_first(
                 "SELECT user_id,
                         username,
+                        password_hash,
                         xp,
                         level,
-                        CONVERT(VARCHAR(33), created_at, 126) AS created_at
-                 FROM dbo.users
-                 WHERE user_id = @P1;",
-                &[&user_id],
+                        DATE_FORMAT(created_at, '%Y-%m-%dT%H:%i:%sZ') AS created_at
+                 FROM users
+                 WHERE user_id = ?;",
+                (user_id,),
             )
-            .await?
-            .into_row()
             .await?;
 
-        Ok(row.map(map_user))
+        Ok(row.map(map_user_credentials))
+    }
+
+    pub async fn get_user_credentials_by_username(
+        &self,
+        username: &str,
+    ) -> Result<Option<StoredUserCredentials>, ApiError> {
+        let mut client = self.database.connect().await?;
+        let row: Option<(String, String, Option<String>, i32, i32, String)> = client
+            .exec_first(
+                "SELECT user_id,
+                        username,
+                        password_hash,
+                        xp,
+                        level,
+                        DATE_FORMAT(created_at, '%Y-%m-%dT%H:%i:%sZ') AS created_at
+                 FROM users
+                 WHERE username = ?;",
+                (username,),
+            )
+            .await?;
+
+        Ok(row.map(map_user_credentials))
     }
 
     pub async fn update_progress(
@@ -61,11 +93,11 @@ impl<'a> UsersRepository<'a> {
         let mut client = self.database.connect().await?;
 
         client
-            .execute(
-                "UPDATE dbo.users
-                 SET xp = @P2, level = @P3
-                 WHERE user_id = @P1;",
-                &[&user_id, &xp, &level],
+            .exec_drop(
+                "UPDATE users
+                 SET xp = ?, level = ?
+                 WHERE user_id = ?;",
+                (xp, level, user_id),
             )
             .await?;
 
@@ -75,21 +107,15 @@ impl<'a> UsersRepository<'a> {
     }
 }
 
-fn map_user(row: tiberius::Row) -> UserProfile {
-    UserProfile {
-        user_id: row
-            .get::<&str, _>("user_id")
-            .unwrap_or_default()
-            .to_string(),
-        username: row
-            .get::<&str, _>("username")
-            .unwrap_or_default()
-            .to_string(),
-        xp: row.get::<i32, _>("xp").unwrap_or_default(),
-        level: row.get::<i32, _>("level").unwrap_or_default(),
-        created_at: row
-            .get::<&str, _>("created_at")
-            .unwrap_or_default()
-            .to_string(),
+fn map_user_credentials(row: (String, String, Option<String>, i32, i32, String)) -> StoredUserCredentials {
+    StoredUserCredentials {
+        profile: UserProfile {
+            user_id: row.0,
+            username: row.1,
+            xp: row.3,
+            level: row.4,
+            created_at: row.5,
+        },
+        password_hash: row.2,
     }
 }
