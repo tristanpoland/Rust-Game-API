@@ -26,13 +26,21 @@ fn build_rocket(state: AppState) -> Rocket<Build> {
 
 #[rocket::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    println!("Loading application configuration...");
     let config = AppConfig::from_env()?;
+    println!(
+        "Configuration loaded. Preparing database at {}:{} / {}",
+        config.database.host, config.database.port, config.database.name
+    );
+
     let database = db::Database::new(config.database.clone());
     let jwt = auth::JwtManager::new(config.auth.clone());
 
+    println!("Starting database bootstrap...");
     initialize_database(&database, &config.bootstrap).await?;
 
     let state = AppState::new(config, database, jwt);
+    println!("Database ready. Launching Rocket server...");
     build_rocket(state).launch().await?;
 
     Ok(())

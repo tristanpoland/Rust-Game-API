@@ -17,8 +17,6 @@ const SCHEMA_SQL: &[&str] = &[
         level INT NOT NULL DEFAULT 1,
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;"#,
-    r#"ALTER TABLE users
-       ADD COLUMN IF NOT EXISTS password_hash VARCHAR(255) NULL AFTER username;"#,
     r#"CREATE TABLE IF NOT EXISTS cards (
         card_id VARCHAR(64) NOT NULL PRIMARY KEY,
         name VARCHAR(120) NOT NULL,
@@ -74,9 +72,18 @@ pub async fn initialize_database(
     let mut last_error: Option<ApiError> = None;
 
     for attempt in 1..=bootstrap.connect_retries {
+        println!(
+            "Bootstrapping database (attempt {attempt}/{})...",
+            bootstrap.connect_retries
+        );
+
         match ensure_database(database).await {
-            Ok(()) => return Ok(()),
+            Ok(()) => {
+                println!("Database bootstrap completed.");
+                return Ok(());
+            }
             Err(error) => {
+                eprintln!("Database bootstrap attempt {attempt} failed: {error}");
                 last_error = Some(error);
 
                 if attempt == bootstrap.connect_retries {
@@ -108,6 +115,8 @@ async fn ensure_database(database: &Database) -> Result<(), ApiError> {
         app_client.query_drop(*statement).await?;
     }
 
+    ensure_password_hash_column(database).await?;
+
     for statement in SEED_SQL {
         app_client.query_drop(*statement).await?;
     }
@@ -117,4 +126,29 @@ async fn ensure_database(database: &Database) -> Result<(), ApiError> {
 
 fn escape_identifier(input: &str) -> String {
     input.replace('`', "``")
+}
+
+async fn ensure_password_hash_column(database: &Database) -> Result<(), ApiError> {
+    let mut client = database.connect().await?;
+    let column_exists: Option<u64> = client
+        .exec_first(
+            r#"SELECT 1
+               FROM INFORMATION_SCHEMA.COLUMNS
+               WHERE TABLE_SCHEMA = ?
+                 AND TABLE_NAME = 'users'
+                 AND COLUMN_NAME = 'password_hash'
+               LIMIT 1;"#,
+            (database.database_name(),),
+        )
+        .await?;
+
+    if column_exists.is_none() {
+        client
+            .query_drop(
+                "ALTER TABLE users ADD COLUMN password_hash VARCHAR(255) NULL AFTER username;",
+            )
+            .await?;
+    }
+
+    Ok(())
 }
